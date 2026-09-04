@@ -148,7 +148,6 @@ class CalculatorResultView(ui.LayoutView):
             label="計算結果",
             style=_style(self._TAB_RESULT),
             disabled=(self.current_tab == self._TAB_RESULT),
-            emoji="<:mura_yahho:1429257148474593280>",
         )
         btn_result.callback = self._switch_result
 
@@ -156,7 +155,6 @@ class CalculatorResultView(ui.LayoutView):
             label="詳細步驟",
             style=_style(self._TAB_STEPS),
             disabled=(self.current_tab == self._TAB_STEPS or not self.steps),
-            emoji="<:mura_kuruma:1429257158133940364>",
         )
         btn_steps.callback = self._switch_steps
 
@@ -168,7 +166,6 @@ class CalculatorResultView(ui.LayoutView):
             btn_decimal = ui.Button(
                 label="顯示精確值" if self.show_decimal else "顯示小數",
                 style=discord.ButtonStyle.blurple if self.show_decimal else discord.ButtonStyle.gray,
-                emoji="<:mura_shy:1429142440794783876>",
             )
             btn_decimal.callback = self._toggle_decimal
             tab_row.add_item(btn_decimal)
