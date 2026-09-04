@@ -1,0 +1,169 @@
+name: Discord Notification
+on:
+  push:
+    branches: [ main ]
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get changed files
+        id: changes
+        run: |
+          # 若是第一個 commit（沒有 HEAD~1），加上保護避免整個 step 失敗
+          if git rev-parse HEAD~1 >/dev/null 2>&1; then
+            git diff --name-status HEAD~1 HEAD > /tmp/namestatus.txt
+            git diff --numstat HEAD~1 HEAD > /tmp/numstat.txt
+          else
+            > /tmp/namestatus.txt
+            > /tmp/numstat.txt
+          fi
+
+          # 用 numstat（新增行\t刪除行\t檔名）建立對照表，再套用到 name-status 上
+          awk '
+            BEGIN { FS="\t" }
+            FNR==NR {
+              add[$3] = $1; del[$3] = $2; next
+            }
+            {
+              file = $2
+              a = (file in add) ? add[file] : "?"
+              d = (file in del) ? del[file] : "?"
+              if (a == "-") a = "?"   # binary 檔案 numstat 會是 "-"
+              if (d == "-") d = "?"
+
+              if ($1 == "A") prefix = "🟢 新增: "
+              else if ($1 == "M") prefix = "🟡 修改: "
+              else if ($1 == "D") prefix = "🔴 刪除: "
+              else prefix = $1 ": "
+
+              print prefix file " (+" a " / -" d ")"
+            }
+          ' /tmp/numstat.txt /tmp/namestatus.txt > /tmp/files.txt
+
+          # 用 name-status 的行數計算變更檔案數量
+          FILE_COUNT=$(grep -c . /tmp/namestatus.txt || true)
+          echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
+
+          # 把變更檔案清單依 900 字元上限切成多段（不截斷，改分段發送），每段寫成一個檔案
+          # /tmp/chunk_files_001.txt, /tmp/chunk_files_002.txt ...
+          awk -v limit=900 -v prefix=/tmp/chunk_files_ '
+            BEGIN { n=1; buf="" }
+            {
+              line = $0
+              candidate = (buf == "" ? line : buf "\n" line)
+              if (length(candidate) > limit && buf != "") {
+                out = sprintf("%s%03d.txt", prefix, n)
+                print buf > out
+                close(out)
+                n++
+                buf = line
+              } else {
+                buf = candidate
+              }
+            }
+            END {
+              if (buf != "") {
+                out = sprintf("%s%03d.txt", prefix, n)
+                print buf > out
+                close(out)
+              } else if (n == 1) {
+                # 完全沒有變更檔案時，至少產生一個空段落，避免後面找不到檔案而整個 step 失敗
+                out = sprintf("%s%03d.txt", prefix, n)
+                print "（無檔案變更資訊）" > out
+                close(out)
+              }
+            }
+          ' /tmp/files.txt
+
+      - name: Send Discord Notifications
+        env:
+          DISCORD_WEBHOOK_PUBLIC: ${{ secrets.DISCORD_WEBHOOK }}
+          DISCORD_WEBHOOK_PRIVATE: ${{ secrets.DISCORD_WEBHOOK_PRIVATE }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          COMMIT_URL: ${{ github.event.head_commit.url }}
+          COMMIT_ID: ${{ github.sha }}
+          AUTHOR_NAME: ${{ github.event.head_commit.author.name }}
+          REPO_NAME: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -e
+          SHORT_SHA=$(echo "$COMMIT_ID" | cut -c1-7)
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          CHUNK_FILES=(/tmp/chunk_files_*.txt)
+          TOTAL=${#CHUNK_FILES[@]}
+
+          send_to_webhook() {
+            local webhook="$1"
+            local label="$2"
+            if [ -z "$webhook" ]; then
+              echo "⚠️ ${label} webhook 未設定，略過發送。"
+              return 0
+            fi
+
+            local i=1
+            for f in "${CHUNK_FILES[@]}"; do
+              local chunk desc title field_name
+              chunk=$(cat "$f")
+
+              if [ "$i" -eq 1 ]; then
+                title="📦 [${REPO_NAME}:${BRANCH}] ${FILE_COUNT} 個新的更新"
+                desc="\`${SHORT_SHA}\` ${COMMIT_MSG}"
+              else
+                title="📦 [${REPO_NAME}:${BRANCH}] 變更檔案（續 ${i}/${TOTAL}）"
+                desc=""
+              fi
+
+              if [ "$TOTAL" -gt 1 ]; then
+                field_name="📝 變更檔案（${i}/${TOTAL}）"
+              else
+                field_name="📝 變更檔案"
+              fi
+
+              payload=$(jq -n \
+                --arg username "GitHub is a Gay!" \
+                --arg avatar "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" \
+                --arg author "$AUTHOR_NAME" \
+                --arg title "$title" \
+                --arg url "$COMMIT_URL" \
+                --arg desc "$desc" \
+                --arg field_name "$field_name" \
+                --arg chunk "$chunk" \
+                --arg ts "$NOW" \
+                '{
+                  username: $username,
+                  avatar_url: $avatar,
+                  embeds: [
+                    {
+                      author: { name: $author },
+                      title: $title,
+                      url: $url,
+                      description: $desc,
+                      fields: [ { name: $field_name, value: ("```\n" + $chunk + "\n```") } ],
+                      color: 3066993,
+                      footer: { text: "千恋＊万花機器人自動部署通知" },
+                      timestamp: $ts
+                    }
+                  ]
+                }')
+
+              curl -sS --fail --connect-timeout 5 --max-time 15 \
+                -H "Content-Type: application/json" -X POST -d "$payload" "$webhook" \
+                || echo "⚠️ 發送給 ${label} 失敗（第 ${i}/${TOTAL} 段）"
+
+              # Discord webhook rate limit 是 5 requests / 2 秒；改動檔案一多，
+              # chunk 數量就會跟著暴增，快速連發很容易被 429 吃掉訊息。
+              if [ "$TOTAL" -gt 1 ] && [ "$i" -lt "$TOTAL" ]; then
+                sleep 0.5
+              fi
+              i=$((i + 1))
+            done
+          }
+
+          send_to_webhook "$DISCORD_WEBHOOK_PUBLIC" "公開頻道"
+          send_to_webhook "$DISCORD_WEBHOOK_PRIVATE" "私人頻道"

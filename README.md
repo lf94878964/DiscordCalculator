@@ -37,7 +37,7 @@ Discord 斜線指令計算機。支援純量、向量、矩陣運算，並且會
 ## 安裝
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/lf94878964/DiscordCalculator
 cd discord-calculator-bot
 pip install -r requirements.txt
 ```
