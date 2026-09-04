@@ -1,0 +1,5 @@
+discord.py>=2.4.0
+sympy>=1.12
+matplotlib>=3.8
+Pillow>=10.0
+python-dotenv>=1.0
