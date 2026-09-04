@@ -146,7 +146,7 @@ jobs:
                       description: $desc,
                       fields: [ { name: $field_name, value: ("```\n" + $chunk + "\n```") } ],
                       color: 3066993,
-                      footer: { text: "千恋＊万花機器人自動部署通知" },
+                      footer: { text: "公開專案「DiscordCalculator」Commit通知" },
                       timestamp: $ts
                     }
                   ]
