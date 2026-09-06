@@ -381,4 +381,6 @@ discord-calculator-bot/
 
 ## 授權
 
-MIT License（可依你的需求自行修改 `LICENSE`）。
+本專案採用 [GNU General Public License v3.0 (GPL-3.0)](LICENSE) 授權條款。
+
+這意味著任何人都可以自由地使用、修改、散布本軟體，但若您修改或基於本專案開發出衍生作品並進行**散布**，您的作品也必須同樣以 GPL-3.0 授權公開開源。詳細內容請參閱專案根目錄下的 [LICENSE](LICENSE) 檔案。
