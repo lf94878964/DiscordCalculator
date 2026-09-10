@@ -1,13 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-command.py — /calculator（計算機）斜線指令本體。
-
-這是從原本機器人專案中抽出來的獨立版本，移除了原本綁定在那個機器人框架上的
-部分（例如封鎖名單檢查、雙語指令註冊 mixin、op 權限檢查、自訂冷卻/計數/日誌
-系統），改用 discord.py 內建的機制取代（`app_commands.checks.cooldown`），
-讓這個 cog 可以直接掛載到任何一般的 discord.py Bot 上使用。
-"""
-
 import discord
 import sympy
 from discord import app_commands
@@ -47,7 +37,6 @@ def _format_decimal_plain_text(value) -> str:
 
 
 class Calculator(commands.Cog):
-    """/calculator（計算機）：支援純量／向量／矩陣運算，並可查看詳細計算步驟。"""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
