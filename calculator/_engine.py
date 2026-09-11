@@ -1,23 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-_engine.py — /計算機 指令的數學運算核心
-
-設計重點：
-1. 全部透過 SymPy 完成運算（精確運算優先，必要時才 .evalf()）
-2. 自訂 SymPy 未內建的函數（H(n,k) 重複組合、少見三角函數等）
-3. 三道安全防護，避免使用者輸入造成程式卡死或記憶體爆炸：
-   a. 前置正規表示式檢查（數字上限 / 次方上限）→ 最快、成本最低
-   b. 個別函數內建的引數上限檢查（factorial / comb / perm / H / isqrt）
-   c. 使用獨立子行程（multiprocessing）執行實際運算，並用 timeout 強制
-      終止行程 → 就算前兩道防線被繞過（例如巢狀冪運算），也不會卡住主流程
-4. 使用 AST 白名單驗證，避免使用者透過屬性存取（例如 (1).__class__...）
-   逃逸出我們允許的函數集合
-
-注意：由於是把使用者輸入的字串丟給 SymPy 的表達式解析器處理，
-無法做到 100% 資安等級的沙盒隔離，建議搭配「最小權限的執行環境」
-（例如限制記憶體 / 停用網路的容器）一起使用。
-"""
-
 from __future__ import annotations
 
 import ast
@@ -45,20 +25,16 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
 )
 
-
-
 class CalcError(Exception):
-    """114514"""
+    """1145141919810"""
 
+MAX_NUMBER = 10 ** 6
+MAX_EXPONENT = 1000
+MAX_FACT_ARG = 500
+MAX_MATRIX_DIM = 12
+COMPUTE_TIMEOUT = 6.0
 
-
-MAX_NUMBER = 10 ** 6          
-MAX_EXPONENT = 1000            
-MAX_FACT_ARG = 500              
-MAX_MATRIX_DIM = 12             
-COMPUTE_TIMEOUT = 6.0            
-
-LARGE_INT_THRESHOLD = 2 ** 31    
+LARGE_INT_THRESHOLD = 2 ** 31
 DECIMAL_DIGITS = 12
 
 
@@ -68,6 +44,7 @@ _POW_TOWER_PATTERN = re.compile(r"(\*\*|\^)\s*\d+(\.\d+)?\s*(\*\*|\^)")
 
 
 def _check_raw_safety(raw: str) -> None:
+    """在真正解析之前，先用正規表示式擋掉明顯過大的數字 / 次方。"""
     for m in _NUM_PATTERN.finditer(raw):
         try:
             val = float(m.group())
@@ -96,6 +73,7 @@ def _check_raw_safety(raw: str) -> None:
 
 
 def _guard_int_arg(value, name: str):
+    """給 factorial / comb / perm / H / isqrt 用的引數安全檢查。"""
     v = sympy.sympify(value)
     if not v.is_number:
         raise CalcError(f"`{name}` 需要數值引數。")
@@ -107,8 +85,6 @@ def _guard_int_arg(value, name: str):
             f"`{name}` 的引數過大（上限 {MAX_FACT_ARG}），避免運算時間過長。"
         )
     return v
-
-
 
 def _safe_factorial(n):
     n = _guard_int_arg(n, "factorial(x) / x!")
@@ -240,6 +216,7 @@ def _crd(x):
 
 
 def _nth_root(x, n):
+    """任意次方根 root(x, n)；n 為奇數時支援負數輸入（例如 root(-32,5) = -2）。"""
     x = sympy.sympify(x)
     n_sym = sympy.sympify(n)
     if not n_sym.is_number:
@@ -254,7 +231,6 @@ def _nth_root(x, n):
             raise CalcError("負數無法計算偶數次方根（結果為虛數，暫不支援）。")
         return -((-x) ** sympy.Rational(1, n_val))
     return x ** sympy.Rational(1, n_val)
-
 
 
 def _stat_values(args) -> List[Any]:
@@ -412,8 +388,6 @@ def _stat_asym(*args):
     return m3 / (m2 ** sympy.Rational(3, 2))
 
 
-
-
 def _as_matrix(v):
     if isinstance(v, MatrixBase):
         return v
@@ -468,10 +442,6 @@ def _distance_vec(v1, v2):
     v1, v2 = _as_matrix(v1), _as_matrix(v2)
     return (v1 - v2).norm()
 
-
-
-
-
 _ANGLE_INPUT_FUNCS = {
     "sin": sin, "cos": cos, "tan": tan, "cot": cot, "sec": sec, "csc": csc,
     "versin": _versin, "vercosin": _vercosin,
@@ -481,12 +451,10 @@ _ANGLE_INPUT_FUNCS = {
     "exsec": _exsec, "excsc": _excsc, "crd": _crd,
 }
 
-
 _ANGLE_OUTPUT_FUNCS = {
     "asin": asin, "acos": acos, "atan": atan,
     "acot": acot, "asec": asec, "acsc": acsc,
 }
-
 
 _HYPERBOLIC_FUNCS = {
     "sinh": sinh, "cosh": cosh, "tanh": tanh,
@@ -505,11 +473,7 @@ def _make_angle_output_wrapper(func, to_unit):
         return to_unit(func(sympy.sympify(x)))
     return wrapped
 
-
-
 _step_log: List[Tuple[Any, Any]] = []
-
-
 _TRACKED_FUNC_NAMES = {
     "sqrt", "isqrt", "cbrt", "pow", "exp", "abs", "Abs",
     "log", "ln", "log10", "log2", "root",
@@ -541,7 +505,6 @@ def _record_and_wrap(display_name: str, func):
 
 
 def build_namespace(mode: str, angle_unit: str) -> dict:
-    """建立 sympify 解析時使用的白名單函式/常數表。"""
 
     if angle_unit == "degree":
         to_rad = lambda x: x * pi / 180
@@ -553,7 +516,7 @@ def build_namespace(mode: str, angle_unit: str) -> dict:
     ns: dict = {
         # 常數
         "pi": pi, "π": pi, "e": E, "tau": tau, "τ": tau, "inf": oo, "oo": oo,
-        # 虛數
+        # 虛數單位：讓使用者可以直接輸入 i 或 I（例如 2+3i、2+3*I），
         "i": sympy.I, "I": sympy.I,
         # 基礎 / 進階運算
         "sqrt": lambda x: sqrt(sympy.sympify(x)),
@@ -564,7 +527,7 @@ def build_namespace(mode: str, angle_unit: str) -> dict:
         "abs": lambda x: Abs(sympy.sympify(x)),
         "Abs": lambda x: Abs(sympy.sympify(x)),
         # 對數
-        "log": lambda x, b=None: (sympy_log(sympy.sympify(x)) if b is None
+        "log": lambda x, b=None: (sympy_log(sympy.sympify(x), 10) if b is None
                                    else sympy_log(sympy.sympify(b)) / sympy_log(sympy.sympify(x))),
         "ln": lambda x: sympy_log(sympy.sympify(x)),
         "log10": lambda x: sympy_log(sympy.sympify(x), 10),
@@ -606,9 +569,7 @@ def build_namespace(mode: str, angle_unit: str) -> dict:
         "qd1": _stat_qd1, "qd2": _stat_qd2, "qd3": _stat_qd3, "qd4": _stat_qd4,
         "iqr": _stat_iqr,
         "asym": _stat_asym,
-        # 矩陣建構子（Matrix.eye / zeros / ones 等透過屬性存取使用）
         "Matrix": Matrix,
-        # SymPy 標準解析轉換（auto_number 等）內部會參照到這些名稱
         "Integer": sympy.Integer,
         "Float": sympy.Float,
         "Rational": sympy.Rational,
@@ -642,13 +603,13 @@ def build_namespace(mode: str, angle_unit: str) -> dict:
 
 
 def _convert_sqrt_symbol(s: str) -> str:
+    # √9 -> sqrt(9) ; √(9+16) -> sqrt(9+16)
     s = re.sub(r"√\s*([A-Za-z0-9_.]+)", r"sqrt(\1)", s)
     s = s.replace("√", "sqrt")
     return s
 
 
 def _convert_factorial_symbol(s: str) -> str:
-    """把 x! 或 (expr)! 轉成 factorial(x) / factorial(expr)。"""
     out: List[str] = []
     i, n = 0, len(s)
     while i < n:
@@ -690,7 +651,6 @@ _HEX_PATTERN = re.compile(r"0[xX][0-9A-Fa-f]+")
 
 
 def _convert_hex_literals(s: str) -> str:
-    """把 0x1A 這種十六進位字面值（含 AaCcDdFf 等字母）轉成十進位數字字串。"""
     return _HEX_PATTERN.sub(lambda m: str(int(m.group(), 16)), s)
 
 
@@ -699,7 +659,6 @@ _SUPERSCRIPT_PATTERN = re.compile(r"[⁰¹²³⁴⁵⁶⁷⁸⁹]+")
 
 
 def _convert_superscript_exponents(s: str) -> str:
-    """把上標數字（例如 2³）轉成 **3 這種一般冪次語法。"""
     def repl(m):
         digits = m.group(0).translate(_SUPERSCRIPT_MAP)
         return f"**({digits})"
@@ -710,7 +669,6 @@ _THOUSANDS_PATTERN = re.compile(r"(?<!\d)\d{1,3}(?:,\d{3})+(?:\.\d+)?")
 
 
 def _strip_thousands_separators(s: str) -> str:
-    """把數字中的千分位逗號拿掉，例如 12,345 -> 12345。"""
     return _THOUSANDS_PATTERN.sub(lambda m: m.group(0).replace(",", ""), s)
 
 
@@ -718,7 +676,6 @@ _REPEAT_NINE_PATTERN = re.compile(r"\d+\.\d*9{13,}\d*")
 
 
 def _collapse_repeating_nines(s: str) -> str:
-    """0.9999999999999（連續 13 位以上的 9，視為循環小數）直接視為 1。"""
     def repl(m):
         try:
             return str(int(round(float(m.group(0)))))
@@ -747,11 +704,25 @@ def _convert_abs_bars(s: str) -> str:
 
 
 def _convert_mod_operator(s: str) -> str:
+    """把 `mod` 關鍵字轉成 `%`，例如 10 mod 3 -> 10%3。"""
     return re.sub(r"\s+mod\s+", "%", s, flags=re.IGNORECASE)
 
 
 def _convert_zscore_alias(s: str) -> str:
+    """z-score(...) 內含連字號無法當作合法識別字，統一轉成 zscore(...)。"""
     return re.sub(r"z-score", "zscore", s, flags=re.IGNORECASE)
+
+
+_LOG_BASE_SHORTHAND_PATTERN = re.compile(r"\blog(\d+)\(")
+
+
+def _convert_log_base_shorthand(s: str) -> str:
+    def repl(m: "re.Match") -> str:
+        base = m.group(1)
+        if base in ("2", "10"):
+            return m.group(0)
+        return f"log({base},"
+    return _LOG_BASE_SHORTHAND_PATTERN.sub(repl, s)
 
 
 def substitute_placeholders(raw: str, variables: Optional[str]) -> str:
@@ -787,6 +758,7 @@ def _insert_implicit_mult(s: str) -> str:
 
 
 def _wrap_bracket_literals(s: str) -> str:
+    """把最外層的中括號 [...] 包成 Matrix(...)，內層維持原樣（用來組成 2D 矩陣列）。"""
     out: List[str] = []
     i, n = 0, len(s)
     while i < n:
@@ -825,6 +797,8 @@ def preprocess(raw: str, mode: str) -> str:
     s = _convert_abs_bars(s)
     s = _convert_sqrt_symbol(s)
     s = _convert_factorial_symbol(s)
+    s = _convert_imaginary_literal(s)
+    s = _convert_log_base_shorthand(s)
     s = _insert_implicit_mult(s)
     s = _convert_mod_operator(s)
     s = _convert_zscore_alias(s)
@@ -839,8 +813,6 @@ def detect_mode(raw: str) -> str:
             return "matrix"
         return "vector"
     return "scalar"
-
-
 
 
 _ALLOWED_METHODS = {
@@ -879,8 +851,6 @@ def validate_ast(s: str) -> None:
             raise CalcError("算式包含不允許的名稱。")
 
 
-
-
 def _check_matrix_dim_safety(raw: str) -> None:
     rows = re.findall(r"\[([^\[\]]*)\]", raw)
     for row in rows:
@@ -901,9 +871,7 @@ class CalcResult:
     mode: str
     original_display: str
     result: Any
-
     steps: List[Tuple[str, Any, Any]] = field(default_factory=list)
-
 
 
 def _make_display_wrapper(display_name: str):
@@ -1089,6 +1057,7 @@ def _cap_float_precision(expr: Any, digits: int = DECIMAL_DIGITS) -> Any:
         pass
     return expr
 
+
 _SCI_NOTATION_SMALL_THRESHOLD = Decimal(1).scaleb(-DECIMAL_DIGITS)
 
 
@@ -1139,7 +1108,6 @@ def has_decimal_variant(value: Any) -> bool:
 
 
 def to_decimal_display(value: Any, digits: int = DECIMAL_DIGITS) -> Any:
-    """把結果（純量或矩陣）轉換成小數表示法，最多到小數點後 `digits` 位。"""
     if isinstance(value, MatrixBase):
         return value.applyfunc(lambda v: to_decimal_display(v, digits))
     try:
@@ -1177,7 +1145,6 @@ def format_decimal_string(value: Any, digits: int = DECIMAL_DIGITS) -> str:
         return f"{re_str}{sign}{im_abs_str}i"
 
     v = re_part
-
     if v.is_Integer:
         return str(int(v))
 
@@ -1189,7 +1156,7 @@ def format_decimal_string(value: Any, digits: int = DECIMAL_DIGITS) -> str:
             p, q = int(v.p), int(v.q)
             neg = p < 0
             exact = Decimal(abs(p)) / Decimal(q)
-            has_more = None  # 稍後用精確值判斷
+            has_more = None 
         else:
             neg = bool(v.is_negative)
             try:
@@ -1260,8 +1227,7 @@ def _do_calculate(raw: str, mode: str, angle_unit: str) -> CalcResult:
         expr = Matrix(expr)
 
     sub_steps = list(_step_log) 
-    step_log_map = dict(sub_steps)  
-
+    step_log_map = dict(sub_steps) 
     display_expr = _build_display_expr(processed, angle_unit) if mode == "scalar" else None
 
     steps: List[Tuple[str, Any, Any]] = [
@@ -1331,7 +1297,6 @@ def _do_calculate(raw: str, mode: str, angle_unit: str) -> CalcResult:
         steps[-1] = ("最終結果", last_lhs, last_rhs)
     else:
         steps.append(("最終結果", final_lhs, result))
-
     guarded_steps: List[Tuple[str, Any, Any]] = []
     for title, lhs, rhs in steps:
         guarded_steps.append((title, _guard_degenerate_lhs(lhs, rhs, raw), rhs))
@@ -1386,7 +1351,7 @@ def _worker(raw: str, mode: str, angle_unit: str, queue: "mp.Queue") -> None:
         queue.put(("ok", _freeze_calc_result(result)))
     except CalcError as e:
         queue.put(("error", str(e)))
-    except Exception as e:  
+    except Exception as e:  # 未預期錯誤也要回報，避免子行程無聲卡死
         queue.put(("error", f"計算過程發生未預期的錯誤：{e}"))
 
 
