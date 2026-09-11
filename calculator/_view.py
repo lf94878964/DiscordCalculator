@@ -1,17 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-_view.py — /計算機 指令的 Components V2 結果顯示介面
-
-版面配置採用與成就系統（AchievementLayout）相同的風格：
-    - ui.LayoutView + ui.Container 包裝整個訊息
-    - 用按鈕切換「結果」／「詳細步驟」兩個頁籤
-    - 「詳細步驟」頁籤內每頁顯示 3 個步驟，並附上該步驟的 LaTeX 圖片
-    - 換頁沿用「⏪第一頁 / 🔙上一頁 / 下一頁🔜 / 最後頁⏩」的按鈕列
-
-輸入 / 輸出文字一律用 Discord 的三個反引號（```）包起來顯示成程式碼區塊，
-避免長算式跑版，也方便使用者直接複製。
-"""
-
 from __future__ import annotations
 
 import io
