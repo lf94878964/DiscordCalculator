@@ -25,8 +25,10 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
 )
 
+
 class CalcError(Exception):
-    """1145141919810"""
+    pass
+
 
 MAX_NUMBER = 10 ** 6
 MAX_EXPONENT = 1000
@@ -44,7 +46,6 @@ _POW_TOWER_PATTERN = re.compile(r"(\*\*|\^)\s*\d+(\.\d+)?\s*(\*\*|\^)")
 
 
 def _check_raw_safety(raw: str) -> None:
-    """在真正解析之前，先用正規表示式擋掉明顯過大的數字 / 次方。"""
     for m in _NUM_PATTERN.finditer(raw):
         try:
             val = float(m.group())
@@ -73,7 +74,6 @@ def _check_raw_safety(raw: str) -> None:
 
 
 def _guard_int_arg(value, name: str):
-    """給 factorial / comb / perm / H / isqrt 用的引數安全檢查。"""
     v = sympy.sympify(value)
     if not v.is_number:
         raise CalcError(f"`{name}` 需要數值引數。")
@@ -85,6 +85,7 @@ def _guard_int_arg(value, name: str):
             f"`{name}` 的引數過大（上限 {MAX_FACT_ARG}），避免運算時間過長。"
         )
     return v
+
 
 def _safe_factorial(n):
     n = _guard_int_arg(n, "factorial(x) / x!")
@@ -104,7 +105,6 @@ def _perm(n, k):
 
 
 def _h_repetition(n, k):
-    """重複組合 H(n, k) = C(n + k - 1, k)，SymPy 未內建，故自訂。"""
     n = _guard_int_arg(n, "h(n, k)")
     k = _guard_int_arg(k, "h(n, k)")
     return binomial(n + k - 1, k)
@@ -216,7 +216,6 @@ def _crd(x):
 
 
 def _nth_root(x, n):
-    """任意次方根 root(x, n)；n 為奇數時支援負數輸入（例如 root(-32,5) = -2）。"""
     x = sympy.sympify(x)
     n_sym = sympy.sympify(n)
     if not n_sym.is_number:
@@ -375,7 +374,6 @@ def _stat_iqr(*args):
 
 
 def _stat_asym(*args):
-    """不對稱性（偏度），採母體偏度公式 m3 / m2^1.5。"""
     vals = _stat_values(args)
     n = len(vals)
     if n < 3:
@@ -442,6 +440,7 @@ def _distance_vec(v1, v2):
     v1, v2 = _as_matrix(v1), _as_matrix(v2)
     return (v1 - v2).norm()
 
+
 _ANGLE_INPUT_FUNCS = {
     "sin": sin, "cos": cos, "tan": tan, "cot": cot, "sec": sec, "csc": csc,
     "versin": _versin, "vercosin": _vercosin,
@@ -473,7 +472,9 @@ def _make_angle_output_wrapper(func, to_unit):
         return to_unit(func(sympy.sympify(x)))
     return wrapped
 
+
 _step_log: List[Tuple[Any, Any]] = []
+
 _TRACKED_FUNC_NAMES = {
     "sqrt", "isqrt", "cbrt", "pow", "exp", "abs", "Abs",
     "log", "ln", "log10", "log2", "root",
@@ -489,7 +490,6 @@ _TRACKED_FUNC_NAMES = {
 
 
 def _record_and_wrap(display_name: str, func):
-    """包一層：呼叫當下記錄「符號呼叫式 = 實際結果」，供步驟顯示用。"""
     def wrapped(*args, **kwargs):
         result = func(*args, **kwargs)
         try:
@@ -514,11 +514,8 @@ def build_namespace(mode: str, angle_unit: str) -> dict:
         to_unit = lambda x: x
 
     ns: dict = {
-        # 常數
         "pi": pi, "π": pi, "e": E, "tau": tau, "τ": tau, "inf": oo, "oo": oo,
-        # 虛數單位：讓使用者可以直接輸入 i 或 I（例如 2+3i、2+3*I），
         "i": sympy.I, "I": sympy.I,
-        # 基礎 / 進階運算
         "sqrt": lambda x: sqrt(sympy.sympify(x)),
         "isqrt": _isqrt,
         "cbrt": _cbrt,
@@ -526,21 +523,17 @@ def build_namespace(mode: str, angle_unit: str) -> dict:
         "exp": lambda x: exp(sympy.sympify(x)),
         "abs": lambda x: Abs(sympy.sympify(x)),
         "Abs": lambda x: Abs(sympy.sympify(x)),
-        # 對數
         "log": lambda x, b=None: (sympy_log(sympy.sympify(x), 10) if b is None
                                    else sympy_log(sympy.sympify(b)) / sympy_log(sympy.sympify(x))),
         "ln": lambda x: sympy_log(sympy.sympify(x)),
         "log10": lambda x: sympy_log(sympy.sympify(x), 10),
         "log2": lambda x: sympy_log(sympy.sympify(x), 2),
-        # 角度轉換
         "degrees": _degrees, "deg": _degrees,
         "radians": _radians, "rad": _radians,
-        # 取整
         "floor": lambda x: floor(sympy.sympify(x)),
         "ceil": lambda x: ceiling(sympy.sympify(x)),
         "ceiling": lambda x: ceiling(sympy.sympify(x)),
         "round": _round_custom,
-        # 組合數學 / 數論
         "factorial": _safe_factorial,
         "gcd": _gcd_variadic,
         "lcm": _lcm_variadic,
@@ -549,14 +542,10 @@ def build_namespace(mode: str, angle_unit: str) -> dict:
         "h": _h_repetition, "H": _h_repetition,
         "hypot": _hypot,
         "dist": _dist,
-        # 雙曲函數
         **_HYPERBOLIC_FUNCS,
-        # 工程數學
         "gamma": lambda x: gamma(sympy.sympify(x)),
         "erf": lambda x: erf(sympy.sympify(x)),
-        # 任意次方根
         "root": _nth_root,
-        # 統計函數
         "min": _stat_min, "max": _stat_max,
         "avg": _stat_mean, "mean": _stat_mean,
         "med": _stat_median,
@@ -584,7 +573,7 @@ def build_namespace(mode: str, angle_unit: str) -> dict:
     for name, func in _ANGLE_OUTPUT_FUNCS.items():
         ns[name] = _make_angle_output_wrapper(func, to_unit)
 
-    if mode in ("vector", "matrix"):
+    if mode in ("vector", "matrix") or mode in _MATRIX_OP_MODES:
         ns.update({
             "dot": _dot,
             "cross": _cross,
@@ -603,7 +592,6 @@ def build_namespace(mode: str, angle_unit: str) -> dict:
 
 
 def _convert_sqrt_symbol(s: str) -> str:
-    # √9 -> sqrt(9) ; √(9+16) -> sqrt(9+16)
     s = re.sub(r"√\s*([A-Za-z0-9_.]+)", r"sqrt(\1)", s)
     s = s.replace("√", "sqrt")
     return s
@@ -704,12 +692,10 @@ def _convert_abs_bars(s: str) -> str:
 
 
 def _convert_mod_operator(s: str) -> str:
-    """把 `mod` 關鍵字轉成 `%`，例如 10 mod 3 -> 10%3。"""
     return re.sub(r"\s+mod\s+", "%", s, flags=re.IGNORECASE)
 
 
 def _convert_zscore_alias(s: str) -> str:
-    """z-score(...) 內含連字號無法當作合法識別字，統一轉成 zscore(...)。"""
     return re.sub(r"z-score", "zscore", s, flags=re.IGNORECASE)
 
 
@@ -758,7 +744,6 @@ def _insert_implicit_mult(s: str) -> str:
 
 
 def _wrap_bracket_literals(s: str) -> str:
-    """把最外層的中括號 [...] 包成 Matrix(...)，內層維持原樣（用來組成 2D 矩陣列）。"""
     out: List[str] = []
     i, n = 0, len(s)
     while i < n:
@@ -802,9 +787,12 @@ def preprocess(raw: str, mode: str) -> str:
     s = _insert_implicit_mult(s)
     s = _convert_mod_operator(s)
     s = _convert_zscore_alias(s)
-    if mode in ("vector", "matrix") or ("[" in s and "]" in s):
+    if mode in ("vector", "matrix") or mode in _MATRIX_OP_MODES or ("[" in s and "]" in s):
         s = _wrap_bracket_literals(s)
     return s
+
+
+_MATRIX_OP_MODES = ("determinant", "permanent", "diagonal")
 
 
 def detect_mode(raw: str) -> str:
@@ -820,7 +808,7 @@ _ALLOWED_METHODS = {
     "nullspace", "columnspace", "LUdecomposition", "QRdecomposition",
     "diagonalize", "jordan_form", "solve", "pinv", "applyfunc", "norm",
     "distance", "dot", "cross", "normalize", "doit", "evalf", "simplify",
-    "expand", "factor", "eye", "zeros", "ones",
+    "expand", "factor", "eye", "zeros", "ones", "per", "diagonal",
 }
 
 _ALLOWED_NODES = (
@@ -863,7 +851,6 @@ def _check_matrix_dim_safety(raw: str) -> None:
         raise CalcError(
             f"矩陣列數過多（上限 {MAX_MATRIX_DIM}），請縮小輸入規模。"
         )
-
 
 
 @dataclass
@@ -947,6 +934,7 @@ from sympy.parsing.sympy_parser import (
 
 
 class _ModAwareEvaluateFalseTransformer(EvaluateFalseTransformer):
+
     def visit_BinOp(self, node):
         if isinstance(node.op, ast.Mod):
             left = self.visit(node.left)
@@ -1145,6 +1133,7 @@ def format_decimal_string(value: Any, digits: int = DECIMAL_DIGITS) -> str:
         return f"{re_str}{sign}{im_abs_str}i"
 
     v = re_part
+
     if v.is_Integer:
         return str(int(v))
 
@@ -1156,14 +1145,14 @@ def format_decimal_string(value: Any, digits: int = DECIMAL_DIGITS) -> str:
             p, q = int(v.p), int(v.q)
             neg = p < 0
             exact = Decimal(abs(p)) / Decimal(q)
-            has_more = None 
+            has_more = None
         else:
             neg = bool(v.is_negative)
             try:
                 exact = abs(Decimal(str(v.evalf(digits + 30))))
             except Exception:
                 exact = abs(Decimal(str(float(v.evalf(digits + 30)))))
-            has_more = True  
+            has_more = True
 
         quant = Decimal(1).scaleb(-digits)
         truncated = exact.quantize(quant, rounding=ROUND_DOWN)
@@ -1226,12 +1215,19 @@ def _do_calculate(raw: str, mode: str, angle_unit: str) -> CalcResult:
     if isinstance(expr, list):
         expr = Matrix(expr)
 
-    sub_steps = list(_step_log) 
-    step_log_map = dict(sub_steps) 
+    sub_steps = list(_step_log)
+    step_log_map = dict(sub_steps)
+
     display_expr = _build_display_expr(processed, angle_unit) if mode == "scalar" else None
 
+    matrix_op_display = (
+        expr if (mode in _MATRIX_OP_MODES and isinstance(expr, MatrixBase)) else None
+    )
+
     steps: List[Tuple[str, Any, Any]] = [
-        ("原始算式", None, display_expr if display_expr is not None else raw)
+        ("原始算式", None,
+         display_expr if display_expr is not None
+         else (matrix_op_display if matrix_op_display is not None else raw))
     ]
 
     if mode == "scalar" and display_expr is not None:
@@ -1266,13 +1262,45 @@ def _do_calculate(raw: str, mode: str, angle_unit: str) -> CalcResult:
         if simplified != expanded:
             steps.append(("進一步化簡", expanded, simplified))
         result = simplified
+    elif mode == "determinant":
+        if not isinstance(expr, MatrixBase):
+            raise CalcError("「行列式」模式請直接輸入矩陣，例如 [[1,2],[3,4]]。")
+        if expr.rows != expr.cols:
+            raise CalcError(
+                f"行列式只能用在方陣（列數＝欄數），目前輸入的是 {expr.rows}x{expr.cols} 矩陣。"
+            )
+        try:
+            result = expr.det()
+        except Exception as e:
+            raise CalcError(f"行列式計算失敗，請確認矩陣內容：{e}")
+    elif mode == "permanent":
+        if not isinstance(expr, MatrixBase):
+            raise CalcError("「積和式」模式請直接輸入矩陣，例如 [[1,2],[3,4]]。")
+        if expr.rows != expr.cols:
+            raise CalcError(
+                f"積和式只能用在方陣（列數＝欄數），目前輸入的是 {expr.rows}x{expr.cols} 矩陣。"
+            )
+        try:
+            result = expr.per()
+        except Exception as e:
+            raise CalcError(f"積和式計算失敗，請確認矩陣內容：{e}")
+    elif mode == "diagonal":
+        if not isinstance(expr, MatrixBase):
+            raise CalcError("「對角線」模式請直接輸入矩陣，例如 [[1,2],[3,4]]。")
+        try:
+            result = expr.diagonal().T
+        except Exception as e:
+            raise CalcError(f"取對角線失敗，請確認矩陣內容：{e}")
     else:
         result = expr
 
     result = _cap_float_precision(result)
     result = format_large_result(result)
 
-    final_lhs = display_expr if display_expr is not None else raw
+    final_lhs = (
+        display_expr if display_expr is not None
+        else (matrix_op_display if matrix_op_display is not None else raw)
+    )
 
     skip_final_step = False
     if steps:
@@ -1297,6 +1325,7 @@ def _do_calculate(raw: str, mode: str, angle_unit: str) -> CalcResult:
         steps[-1] = ("最終結果", last_lhs, last_rhs)
     else:
         steps.append(("最終結果", final_lhs, result))
+
     guarded_steps: List[Tuple[str, Any, Any]] = []
     for title, lhs, rhs in steps:
         guarded_steps.append((title, _guard_degenerate_lhs(lhs, rhs, raw), rhs))
@@ -1351,7 +1380,7 @@ def _worker(raw: str, mode: str, angle_unit: str, queue: "mp.Queue") -> None:
         queue.put(("ok", _freeze_calc_result(result)))
     except CalcError as e:
         queue.put(("error", str(e)))
-    except Exception as e:  # 未預期錯誤也要回報，避免子行程無聲卡死
+    except Exception as e:
         queue.put(("error", f"計算過程發生未預期的錯誤：{e}"))
 
 
@@ -1370,7 +1399,7 @@ async def safe_calculate(
     _check_raw_safety(raw)
 
     resolved_mode = mode or detect_mode(raw)
-    if resolved_mode in ("vector", "matrix"):
+    if resolved_mode in ("vector", "matrix") or resolved_mode in _MATRIX_OP_MODES:
         _check_matrix_dim_safety(raw)
 
     if loop is None:

@@ -52,7 +52,7 @@ class Calculator(commands.Cog):
     @app_commands.describe(
         函式="要計算的算式，例如 sin(30)+2^2、[1,2,3]+[4,5,6]、[[1,2],[3,4]].det()",
         角度單位="三角函數的角度單位（預設：弧度）",
-        模式="運算模式，若不填會依算式內容自動判斷（有中括號會自動切換成向量／矩陣）",
+        模式="運算模式，若不填會依算式內容自動判斷（有中括號會自動切換成向量／矩陣）；行列式／積和式／對角線需手動選擇，直接輸入矩陣即可，不用自己打 .det()",
     )
     @app_commands.choices(
         角度單位=[
@@ -63,6 +63,9 @@ class Calculator(commands.Cog):
             app_commands.Choice(name="純量", value="scalar"),
             app_commands.Choice(name="向量", value="vector"),
             app_commands.Choice(name="矩陣", value="matrix"),
+            app_commands.Choice(name="行列式", value="determinant"),
+            app_commands.Choice(name="積和式", value="permanent"),
+            app_commands.Choice(name="對角線", value="diagonal"),
         ],
     )
     @app_commands.checks.cooldown(1, 3.0, key=lambda i: i.user.id)

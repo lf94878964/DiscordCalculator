@@ -14,12 +14,15 @@ class CalculatorResultView(ui.LayoutView):
 
     STEPS_PER_PAGE = 3
 
-    _MODE_LABEL = {"scalar": "純量", "vector": "向量", "matrix": "矩陣"}
+    _MODE_LABEL = {
+        "scalar": "純量", "vector": "向量", "matrix": "矩陣",
+        "determinant": "行列式", "permanent": "積和式", "diagonal": "對角線",
+    }
     _ANGLE_LABEL = {"degree": "角度", "radian": "弧度"}
 
     def __init__(
         self,
-        bot=None,
+        bot,
         *,
         requester_id: int,
         mode: str,
@@ -39,7 +42,7 @@ class CalculatorResultView(ui.LayoutView):
         self.raw_input = raw_input
         self.result_text = result_text
         self.result_image = result_image
-        self.steps = steps  # List[(title, png_bytes)]
+        self.steps = steps
 
         self.decimal_text = decimal_text
         self.decimal_image = decimal_image
@@ -97,9 +100,7 @@ class CalculatorResultView(ui.LayoutView):
         return files
 
 
-
     def _build(self):
-
         self._render_seq += 1
 
         self.clear_items()
@@ -113,7 +114,7 @@ class CalculatorResultView(ui.LayoutView):
         output_label = "輸出（小數，最多顯示到小數第12位，超過以...表示）" if showing_decimal else "輸出"
         header = ui.TextDisplay(
             content=(
-                f"## <:mura_hide:1429257159618723981>計算機結果\n"
+                f"## 計算機結果\n"
                 f"**模式**：{mode_label}　**角度單位**：{angle_label}\n"
                 f"**輸入**\n```\n{self.raw_input}\n```\n"
                 f"**{output_label}**\n```\n{output_text}\n```\n"
@@ -121,7 +122,6 @@ class CalculatorResultView(ui.LayoutView):
             )
         )
         container.add_item(header)
-
 
         tab_row = ui.ActionRow()
 
@@ -146,7 +146,6 @@ class CalculatorResultView(ui.LayoutView):
 
         tab_row.add_item(btn_result)
         tab_row.add_item(btn_steps)
-
 
         if self.current_tab == self._TAB_RESULT and self.decimal_image is not None:
             btn_decimal = ui.Button(
@@ -218,41 +217,81 @@ class CalculatorResultView(ui.LayoutView):
         self.add_item(container)
 
 
-
     async def _switch_result(self, interaction: discord.Interaction):
         self.current_tab = self._TAB_RESULT
         self._build()
+        self.bot.command_count.record(
+            category="slash_command",
+            command_name="計算機",
+            sub_key="計算結果",
+            interaction=interaction,
+        )
         await interaction.response.edit_message(view=self, attachments=self._current_files())
 
     async def _switch_steps(self, interaction: discord.Interaction):
         self.current_tab = self._TAB_STEPS
         self.step_page = 0
         self._build()
+        self.bot.command_count.record(
+            category="slash_command",
+            command_name="計算機",
+            sub_key="詳細步驟",
+            interaction=interaction,
+        )
         await interaction.response.edit_message(view=self, attachments=self._current_files())
 
     async def _toggle_decimal(self, interaction: discord.Interaction):
         self.show_decimal = not self.show_decimal
         self._build()
+        self.bot.command_count.record(
+            category="slash_command",
+            command_name="計算機",
+            sub_key="切換小數/精確值",
+            interaction=interaction,
+        )
         await interaction.response.edit_message(view=self, attachments=self._current_files())
-
 
 
     async def _goto_first(self, interaction: discord.Interaction):
         self.step_page = 0
         self._build()
+        self.bot.command_count.record(
+            category="slash_command",
+            command_name="計算機",
+            sub_key="首頁",
+            interaction=interaction,
+        )
         await interaction.response.edit_message(view=self, attachments=self._current_files())
 
     async def _goto_prev(self, interaction: discord.Interaction):
         self.step_page = max(0, self.step_page - 1)
         self._build()
+        self.bot.command_count.record(
+            category="slash_command",
+            command_name="計算機",
+            sub_key="上頁",
+            interaction=interaction,
+        )
         await interaction.response.edit_message(view=self, attachments=self._current_files())
 
     async def _goto_next(self, interaction: discord.Interaction):
         self.step_page = min(self._max_step_page, self.step_page + 1)
         self._build()
+        self.bot.command_count.record(
+            category="slash_command",
+            command_name="計算機",
+            sub_key="下頁",
+            interaction=interaction,
+        )
         await interaction.response.edit_message(view=self, attachments=self._current_files())
 
     async def _goto_last(self, interaction: discord.Interaction):
         self.step_page = self._max_step_page
         self._build()
+        self.bot.command_count.record(
+            category="slash_command",
+            command_name="計算機",
+            sub_key="末頁",
+            interaction=interaction,
+        )
         await interaction.response.edit_message(view=self, attachments=self._current_files())
