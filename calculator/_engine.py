@@ -665,7 +665,7 @@ def _convert_superscript_exponents(s: str) -> str:
     return _SUPERSCRIPT_PATTERN.sub(repl, s)
 
 
-_THOUSANDS_PATTERN = re.compile(r"(?<!\d)\d{1,3}(?:,\d{3})+(?:\.\d+)?")
+_THOUSANDS_PATTERN = re.compile(r"(?<![\d(,])\d{1,3}(?:,\d{3})+(?:\.\d+)?")
 
 
 def _strip_thousands_separators(s: str) -> str:
