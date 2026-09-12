@@ -11,6 +11,8 @@ Discord 斜線指令計算機。支援純量、向量、矩陣運算，並且會
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![discord.py](https://img.shields.io/badge/discord.py-2.4%2B-5865F2)
 
+![截圖](https://github.com/lf94878964/image/blob/main/%E8%9E%A2%E5%B9%95%E6%93%B7%E5%8F%96%E7%95%AB%E9%9D%A2%202026-09-12%20091641.png?raw=true)
+
 ## 功能特色
 
 - **精確運算優先**：全程透過 SymPy 計算，能算就不用浮點數，分數 / 根號 /

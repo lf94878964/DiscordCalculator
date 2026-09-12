@@ -10,7 +10,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 2
-
       - name: Get changed files
         id: changes
         run: |
@@ -18,17 +17,62 @@ jobs:
           if git rev-parse HEAD~1 >/dev/null 2>&1; then
             git diff --name-status HEAD~1 HEAD > /tmp/namestatus.txt
             git diff --numstat HEAD~1 HEAD > /tmp/numstat.txt
+            # 用「字元級」word-diff（--word-diff-regex=. 把每個字元當成一個比對單位），
+            # 這樣像「幫一段中文字加超連結」這種只改一小段的編輯，才不會被 git 預設的整行比對
+            # 誤判成「整行刪除 + 整行新增」，把整行字數都算進變更量。
+            # LC_ALL=C.UTF-8 確保多位元組的中文字元被正確視為單一字元而不是被拆成 byte。
+            LC_ALL=C.UTF-8 git diff --word-diff=porcelain --word-diff-regex=. -U0 HEAD~1 HEAD > /tmp/worddiff.txt
           else
             > /tmp/namestatus.txt
             > /tmp/numstat.txt
+            > /tmp/worddiff.txt
           fi
 
-          # 用 numstat（新增行\t刪除行\t檔名）建立對照表，再套用到 name-status 上
+          # 用 Python 逐行解析字元級 word-diff，依檔案累加「實際新增/刪除」的字元數
+          # （用 Python 而非 awk，是因為 awk 的 length() 在部分 runner 上是用 byte 計算，
+          #   中文字會被算成多個 byte，數字不準；Python3 字串是以 Unicode 字元計算，才會跟「字數」對得上）
+          python3 - <<'PYEOF'
+          add_chars = {}
+          del_chars = {}
+          cur = None
+
+          with open("/tmp/worddiff.txt", "r", encoding="utf-8", errors="replace") as f:
+              for line in f:
+                  line = line.rstrip("\n")
+                  if line.startswith("diff --git "):
+                      parts = line.split(" b/", 1)
+                      cur = parts[1] if len(parts) == 2 else None
+                      continue
+                  if line.startswith("+++ ") or line.startswith("--- "):
+                      continue
+                  if line.startswith("index ") or line.startswith("@@") or line.startswith("Binary files"):
+                      continue
+                  if cur is None:
+                      continue
+                  if line.startswith("~"):
+                      # 原本行內換行的標記，不是實際的字元變更，略過
+                      continue
+                  if line.startswith("+"):
+                      add_chars[cur] = add_chars.get(cur, 0) + len(line[1:])
+                  elif line.startswith("-"):
+                      del_chars[cur] = del_chars.get(cur, 0) + len(line[1:])
+                  # 開頭是空白的行代表「未變更的字元」（context），不計入
+
+          with open("/tmp/charadd.tsv", "w", encoding="utf-8") as f:
+              for k, v in add_chars.items():
+                  f.write(f"{k}\t{v}\n")
+
+          with open("/tmp/chardel.tsv", "w", encoding="utf-8") as f:
+              for k, v in del_chars.items():
+                  f.write(f"{k}\t{v}\n")
+          PYEOF
+
+          # 用 numstat（新增行\t刪除行\t檔名）+ 上面算好的字元數，套用到 name-status 上
           awk '
             BEGIN { FS="\t" }
-            FNR==NR {
-              add[$3] = $1; del[$3] = $2; next
-            }
+            FILENAME=="/tmp/numstat.txt" { add[$3]=$1; del[$3]=$2; next }
+            FILENAME=="/tmp/charadd.tsv" { cadd[$1]=$2; next }
+            FILENAME=="/tmp/chardel.tsv" { cdel[$1]=$2; next }
             {
               file = $2
               a = (file in add) ? add[file] : "?"
@@ -36,14 +80,17 @@ jobs:
               if (a == "-") a = "?"   # binary 檔案 numstat 會是 "-"
               if (d == "-") d = "?"
 
+              ca = (file in cadd) ? cadd[file] : 0
+              cd = (file in cdel) ? cdel[file] : 0
+
               if ($1 == "A") prefix = "🟢 新增: "
               else if ($1 == "M") prefix = "🟡 修改: "
               else if ($1 == "D") prefix = "🔴 刪除: "
               else prefix = $1 ": "
 
-              print prefix file " (+" a " / -" d ")"
+              print prefix file " (+" a " / -" d ") [+" ca "字 / -" cd "字]"
             }
-          ' /tmp/numstat.txt /tmp/namestatus.txt > /tmp/files.txt
+          ' /tmp/numstat.txt /tmp/charadd.tsv /tmp/chardel.tsv /tmp/namestatus.txt > /tmp/files.txt
 
           # 用 name-status 的行數計算變更檔案數量
           FILE_COUNT=$(grep -c . /tmp/namestatus.txt || true)
