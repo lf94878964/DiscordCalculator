@@ -92,6 +92,24 @@ def _safe_factorial(n):
     return factorial(n)
 
 
+def _guard_nonneg_integer(value, name: str):
+    v = _guard_int_arg(value, name)
+    fv = float(v)
+    if fv != int(fv):
+        raise CalcError(f"`{name}` 僅支援非負整數。")
+    return sympy.Integer(int(fv))
+
+
+def _safe_double_factorial(n):
+    n = _guard_nonneg_integer(n, "double_factorial(x) / x!!")
+    return sympy.factorial2(n)
+
+
+def _safe_subfactorial(n):
+    n = _guard_nonneg_integer(n, "subfactorial(x) / !x")
+    return sympy.subfactorial(n)
+
+
 def _comb(n, k):
     n = _guard_int_arg(n, "comb(n, k)")
     k = _guard_int_arg(k, "comb(n, k)")
@@ -480,7 +498,8 @@ _TRACKED_FUNC_NAMES = {
     "log", "ln", "log10", "log2", "root",
     "degrees", "deg", "radians", "rad",
     "floor", "ceil", "ceiling", "round",
-    "factorial", "gcd", "lcm", "comb", "C", "perm", "P", "h", "H",
+    "factorial", "double_factorial", "factorial2", "subfactorial",
+    "gcd", "lcm", "comb", "C", "perm", "P", "h", "H",
     "hypot", "dist",
     "gamma", "erf",
     "min", "max", "avg", "mean", "med", "mode", "var", "sd",
@@ -535,6 +554,9 @@ def build_namespace(mode: str, angle_unit: str) -> dict:
         "ceiling": lambda x: ceiling(sympy.sympify(x)),
         "round": _round_custom,
         "factorial": _safe_factorial,
+        "double_factorial": _safe_double_factorial,
+        "factorial2": _safe_double_factorial,
+        "subfactorial": _safe_subfactorial,
         "gcd": _gcd_variadic,
         "lcm": _lcm_variadic,
         "comb": _comb, "C": _comb,
@@ -597,41 +619,113 @@ def _convert_sqrt_symbol(s: str) -> str:
     return s
 
 
+_IDENT_TAIL = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _ends_operand(out: List[str]) -> bool:
+    """out 目前的結尾（略過空白）是否是一個運算元的結尾：數字／名稱／右括號。"""
+    k = len(out) - 1
+    while k >= 0 and out[k].isspace():
+        k -= 1
+    return k >= 0 and (out[k].isalnum() or out[k] in "_.)")
+
+
+def _match_paren(s: str, i: int) -> int:
+    """s[i] 是 '('，回傳對應 ')' 的索引。"""
+    depth = 0
+    for j in range(i, len(s)):
+        if s[j] == "(":
+            depth += 1
+        elif s[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j
+    raise CalcError("`!` 後面的括號不成對。")
+
+
+def _pop_postfix_atom(out: List[str]) -> str:
+    """取出後綴 `!`／`!!` 作用的運算元（含前面的函式名稱），並從 out 移除。"""
+    while out and out[-1].isspace():
+        out.pop()
+    if not out:
+        raise CalcError("`!` 前面缺少可計算的數值或變數。")
+    if out[-1] == ")":
+        depth = 0
+        k = len(out) - 1
+        while k >= 0:
+            if out[k] == ")":
+                depth += 1
+            elif out[k] == "(":
+                depth -= 1
+                if depth == 0:
+                    break
+            k -= 1
+        if k < 0:
+            raise CalcError("`!` 前面的括號不成對。")
+        m = _IDENT_TAIL.search("".join(out[:k]))
+        if m:  # sin(30)! 這類「函式名稱＋括號」要整個當運算元
+            k -= len(m.group())
+        atom = "".join(out[k:])
+        del out[k:]
+        return atom
+    k = len(out) - 1
+    while k >= 0 and (out[k].isalnum() or out[k] in "_."):
+        k -= 1
+    atom = "".join(out[k + 1:])
+    if not atom:
+        raise CalcError("`!` 前面缺少可計算的數值或變數。")
+    del out[k + 1:]
+    return atom
+
+
+def _take_prefix_operand(s: str, i: int) -> Tuple[str, int]:
+    """前綴 `!x`（子階乘）：從 s[i] 取出運算元，回傳 (運算元, 下一個索引)。"""
+    n = len(s)
+    while i < n and s[i].isspace():
+        i += 1
+    if i >= n:
+        raise CalcError("`!` 後面缺少可計算的數值或變數。")
+    if s[i] == "(":
+        j = _match_paren(s, i)
+        return _convert_factorial_symbol(s[i:j + 1]), j + 1
+    j = i
+    while j < n and (s[j].isalnum() or s[j] in "_."):
+        j += 1
+    token = s[i:j]
+    if not token:
+        raise CalcError("`!` 後面缺少可計算的數值或變數。")
+    if j < n and s[j] == "(" and (token[0].isalpha() or token[0] == "_"):
+        k = _match_paren(s, j)  # !sqrt(16) 這類函式呼叫
+        return _convert_factorial_symbol(s[i:k + 1]), k + 1
+    return token, j
+
+
 def _convert_factorial_symbol(s: str) -> str:
+    """階乘符號轉換：
+        x!   → factorial(x)
+        x!!  → factorial2(x)       雙階乘
+        !x   → subfactorial(x)     子階乘（`!` 在運算元前面時）
+    """
     out: List[str] = []
     i, n = 0, len(s)
     while i < n:
         c = s[i]
-        if c == "!":
-            if out and out[-1] == ")":
-                depth = 0
-                k = len(out) - 1
-                while k >= 0:
-                    if out[k] == ")":
-                        depth += 1
-                    elif out[k] == "(":
-                        depth -= 1
-                        if depth == 0:
-                            break
-                    k -= 1
-                if k < 0:
-                    raise CalcError("`!` 前面的括號不成對。")
-                atom = "".join(out[k:])
-                del out[k:]
-                out.append(f"factorial({atom})")
-            else:
-                k = len(out) - 1
-                while k >= 0 and (out[k].isalnum() or out[k] in "_."):
-                    k -= 1
-                atom = "".join(out[k + 1:])
-                if not atom:
-                    raise CalcError("`!` 前面缺少可計算的數值或變數。")
-                del out[k + 1:]
-                out.append(f"factorial({atom})")
-            i += 1
-        else:
+        if c != "!":
             out.append(c)
             i += 1
+            continue
+        if _ends_operand(out):
+            double = i + 1 < n and s[i + 1] == "!"
+            if double and i + 2 < n and s[i + 2] == "!":
+                raise CalcError("不支援連續三個以上的 `!`，請用括號拆開，例如 `(5!!)!`。")
+            atom = _pop_postfix_atom(out)
+            out.extend(f"{'factorial2' if double else 'factorial'}({atom})")
+            i += 2 if double else 1
+        else:
+            if i + 1 < n and s[i + 1] == "!":
+                raise CalcError("`!!` 前面缺少可計算的數值或變數。")
+            atom, i = _take_prefix_operand(s, i + 1)
+            out.extend(f"subfactorial({atom})")
     return "".join(out)
 
 
@@ -656,772 +750,4 @@ def _convert_superscript_exponents(s: str) -> str:
 _THOUSANDS_PATTERN = re.compile(r"(?<![\d(,])\d{1,3}(?:,\d{3})+(?:\.\d+)?")
 
 
-def _strip_thousands_separators(s: str) -> str:
-    return _THOUSANDS_PATTERN.sub(lambda m: m.group(0).replace(",", ""), s)
-
-
-_REPEAT_NINE_PATTERN = re.compile(r"\d+\.\d*9{13,}\d*")
-
-
-def _collapse_repeating_nines(s: str) -> str:
-    def repl(m):
-        try:
-            return str(int(round(float(m.group(0)))))
-        except Exception:
-            return m.group(0)
-    return _REPEAT_NINE_PATTERN.sub(repl, s)
-
-
-def _convert_abs_bars(s: str) -> str:
-    buffers: List[List[str]] = [[]]
-    for c in s:
-        if c == "|":
-            if len(buffers) == 1:
-                buffers.append([])
-            elif not buffers[-1]:
-                buffers.append([])
-            else:
-                content = "".join(buffers.pop())
-                buffers[-1].append(f"Abs({content})")
-        else:
-            buffers[-1].append(c)
-    while len(buffers) > 1:
-        content = "".join(buffers.pop())
-        buffers[-1].append("|" + content)
-    return "".join(buffers[0])
-
-
-def _convert_mod_operator(s: str) -> str:
-    return re.sub(r"\s+mod\s+", "%", s, flags=re.IGNORECASE)
-
-
-def _convert_zscore_alias(s: str) -> str:
-    return re.sub(r"z-score", "zscore", s, flags=re.IGNORECASE)
-
-
-_LOG_BASE_SHORTHAND_PATTERN = re.compile(r"\blog(\d+)\(")
-
-
-def _convert_log_base_shorthand(s: str) -> str:
-    def repl(m: "re.Match") -> str:
-        base = m.group(1)
-        if base in ("2", "10"):
-            return m.group(0)
-        return f"log({base},"
-    return _LOG_BASE_SHORTHAND_PATTERN.sub(repl, s)
-
-
-def substitute_placeholders(raw: str, variables: Optional[str]) -> str:
-    if "?" not in raw:
-        return raw
-    count = raw.count("?")
-    if not variables or not variables.strip():
-        raise CalcError(f"算式包含 {count} 個 `?` 佔位符，請在「替換值」欄位提供對應的數值。")
-    parts = [v.strip() for v in re.split(r"[,，、]", variables) if v.strip() != ""]
-    if len(parts) != count:
-        raise CalcError(
-            f"`?` 佔位符數量（{count}）與提供的替換值數量（{len(parts)}）不一致。"
-        )
-    it = iter(parts)
-    return re.sub(r"\?", lambda _m: next(it), raw)
-
-
-_IMAG_LITERAL_PATTERN = re.compile(r"(?<![A-Za-z0-9_.])(\d+(?:\.\d+)?)[iI](?![A-Za-z0-9_])")
-_IMAG_LITERAL_AFTER_PAREN_PATTERN = re.compile(r"(\))[iI](?![A-Za-z0-9_])")
-
-
-def _convert_imaginary_literal(s: str) -> str:
-    s = _IMAG_LITERAL_PATTERN.sub(lambda m: f"{m.group(1)}*I", s)
-    s = _IMAG_LITERAL_AFTER_PAREN_PATTERN.sub(lambda m: f"{m.group(1)}*I", s)
-    return s
-
-
-def _insert_implicit_mult(s: str) -> str:
-    s = re.sub(r"(?<![A-Za-z0-9_])(\d+(?:\.\d+)?)(\()", r"\1*\2", s)
-    s = re.sub(r"(\))(\d+(?:\.\d+)?)", r"\1*\2", s)
-    s = re.sub(r"(\))(\()", r"\1*\2", s)
-    return s
-
-
-def _wrap_bracket_literals(s: str) -> str:
-    out: List[str] = []
-    i, n = 0, len(s)
-    while i < n:
-        c = s[i]
-        if c == "[":
-            depth = 1
-            j = i + 1
-            while j < n and depth > 0:
-                if s[j] == "[":
-                    depth += 1
-                elif s[j] == "]":
-                    depth -= 1
-                j += 1
-            if depth != 0:
-                raise CalcError("中括號不成對，請檢查向量/矩陣輸入格式。")
-            inner = s[i:j]
-            out.append(f"Matrix({inner})")
-            i = j
-        else:
-            out.append(c)
-            i += 1
-    return "".join(out)
-
-
-def preprocess(raw: str, mode: str) -> str:
-    s = raw.strip()
-    s = _collapse_repeating_nines(s)
-    s = _strip_thousands_separators(s)
-    s = _convert_hex_literals(s)
-    s = s.replace("×", "*").replace("÷", "/").replace("^", "**")
-    s = s.replace("π", "pi").replace("𝝅", "pi").replace("τ", "tau")
-    s = _convert_superscript_exponents(s)
-    if mode == "scalar":
-        s = s.replace("[", "(").replace("]", ")")
-        s = s.replace("{", "(").replace("}", ")")
-    s = _convert_abs_bars(s)
-    s = _convert_sqrt_symbol(s)
-    s = _convert_factorial_symbol(s)
-    s = _convert_imaginary_literal(s)
-    s = _convert_log_base_shorthand(s)
-    s = _insert_implicit_mult(s)
-    s = _convert_mod_operator(s)
-    s = _convert_zscore_alias(s)
-    if mode in ("vector", "matrix") or mode in _MATRIX_OP_MODES or ("[" in s and "]" in s):
-        s = _wrap_bracket_literals(s)
-    return s
-
-
-_MATRIX_OP_MODES = ("determinant", "permanent", "diagonal")
-
-
-def detect_mode(raw: str) -> str:
-    if "[" in raw and "]" in raw:
-        if re.search(r"\[\s*\[", raw):
-            return "matrix"
-        return "vector"
-    return "scalar"
-
-
-_ALLOWED_METHODS = {
-    "T", "inv", "det", "rank", "trace", "eigenvals", "eigenvects",
-    "nullspace", "columnspace", "LUdecomposition", "QRdecomposition",
-    "diagonalize", "jordan_form", "solve", "pinv", "applyfunc", "norm",
-    "distance", "dot", "cross", "normalize", "doit", "evalf", "simplify",
-    "expand", "factor", "eye", "zeros", "ones", "per", "diagonal",
-}
-
-_ALLOWED_NODES = (
-    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.Load,
-    ast.Constant, ast.Attribute, ast.List, ast.Tuple,
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod, ast.FloorDiv,
-    ast.USub, ast.UAdd, ast.keyword,
-)
-
-
-def validate_ast(s: str) -> None:
-    try:
-        tree = ast.parse(s, mode="eval")
-    except SyntaxError as e:
-        raise CalcError(f"算式格式錯誤，請確認輸入是否正確：{e}")
-
-    for node in ast.walk(tree):
-        if not isinstance(node, _ALLOWED_NODES):
-            raise CalcError(
-                f"算式包含不支援的語法（{type(node).__name__}），請確認輸入。"
-            )
-        if isinstance(node, ast.Attribute):
-            if node.attr.startswith("__") and node.attr.endswith("__"):
-                raise CalcError("算式包含不允許的屬性存取。")
-            if node.attr not in _ALLOWED_METHODS:
-                raise CalcError(f"不支援的方法：`.{node.attr}()`")
-        if isinstance(node, ast.Name) and node.id.startswith("__"):
-            raise CalcError("算式包含不允許的名稱。")
-
-
-def _check_matrix_dim_safety(raw: str) -> None:
-    rows = re.findall(r"\[([^\[\]]*)\]", raw)
-    for row in rows:
-        count = len([p for p in row.split(",") if p.strip() != ""])
-        if count > MAX_MATRIX_DIM:
-            raise CalcError(
-                f"向量/矩陣單一維度過大（上限 {MAX_MATRIX_DIM}），請縮小輸入規模。"
-            )
-    if len(rows) > MAX_MATRIX_DIM:
-        raise CalcError(
-            f"矩陣列數過多（上限 {MAX_MATRIX_DIM}），請縮小輸入規模。"
-        )
-
-
-@dataclass
-class CalcResult:
-    mode: str
-    original_display: str
-    result: Any
-    steps: List[Tuple[str, Any, Any]] = field(default_factory=list)
-
-
-def _make_display_wrapper(display_name: str):
-    def wrapped(*args, **kwargs):
-        sym_args = [a if isinstance(a, (sympy.Basic, MatrixBase)) else sympy.sympify(a)
-                    for a in args]
-        return sympy.Function(display_name)(*sym_args)
-    return wrapped
-
-
-def build_display_namespace(angle_unit: str) -> dict:
-    ns = build_namespace("scalar", angle_unit)
-    for name in list(ns.keys()):
-        if name in _TRACKED_FUNC_NAMES:
-            ns[name] = _make_display_wrapper(name)
-    return ns
-
-
-def _find_reducible_node(node: Any):
-    args = getattr(node, "args", ())
-    if not args:
-        return None
-    for child in reversed(args):
-        found = _find_reducible_node(child)
-        if found is not None:
-            return found
-    if all(isinstance(a, sympy.Number) for a in args):
-        return node
-    return None
-
-
-def _replace_node_keep_unevaluated(state: Any, target: Any, value: Any):
-    if state == target:
-        return value
-    args = getattr(state, "args", ())
-    if not args:
-        return state
-    new_args = tuple(_replace_node_keep_unevaluated(a, target, value) for a in args)
-    if new_args == args:
-        return state
-    try:
-        return state.func(*new_args, evaluate=False)
-    except TypeError:
-        return state.func(*new_args)
-
-
-def _reduce_one_step(state: Any, step_log_map: dict):
-    target = _find_reducible_node(state)
-    if target is None:
-        return None, None
-
-    if isinstance(target, sympy.core.function.AppliedUndef):
-        if target not in step_log_map:
-            return None, None
-        value = step_log_map[target]
-    else:
-        try:
-            value = target.func(*target.args)
-        except Exception:
-            return None, None
-        if not isinstance(value, sympy.Number):
-            return None, None
-
-    new_state = _replace_node_keep_unevaluated(state, target, value)
-    return target, new_state
-
-
-from sympy.parsing.sympy_parser import (
-    EvaluateFalseTransformer,
-    eval_expr as _sympy_eval_expr,
-    stringify_expr as _sympy_stringify_expr,
-)
-
-
-class _ModAwareEvaluateFalseTransformer(EvaluateFalseTransformer):
-
-    def visit_BinOp(self, node):
-        if isinstance(node.op, ast.Mod):
-            left = self.visit(node.left)
-            right = self.visit(node.right)
-            return ast.Call(
-                func=ast.Name(id="Mod", ctx=ast.Load()),
-                args=[left, right],
-                keywords=[ast.keyword(arg="evaluate", value=ast.Constant(value=False))],
-            )
-        return super().visit_BinOp(node)
-
-
-def _evaluate_false_mod_aware(code: str):
-    node = ast.parse(code)
-    transformed_node = _ModAwareEvaluateFalseTransformer().visit(node)
-    transformed_node = ast.Expression(transformed_node.body[0].value)
-    return ast.fix_missing_locations(transformed_node)
-
-
-def _build_display_expr(processed: str, angle_unit: str):
-    try:
-        display_namespace = build_display_namespace(angle_unit)
-        display_namespace.setdefault("Mod", sympy.Mod)
-        display_global = {"__builtins__": {}}
-        display_global.update(display_namespace)
-        transformations = standard_transformations + (
-            implicit_multiplication_application,
-            convert_xor,
-        )
-        code = _sympy_stringify_expr(processed, display_namespace, display_global, transformations)
-        compiled = compile(_evaluate_false_mod_aware(code), "<string>", "eval")
-        display_expr = _sympy_eval_expr(compiled, display_namespace, display_global)
-        if isinstance(display_expr, list) or isinstance(display_expr, MatrixBase):
-            return None
-        return display_expr
-    except Exception:
-        return None
-
-
-def _exprs_equal(a: Any, b: Any) -> bool:
-    if isinstance(a, str) or isinstance(b, str):
-        return False
-    if isinstance(a, MatrixBase) or isinstance(b, MatrixBase):
-        return False
-    try:
-        if a == b:
-            return True
-        diff = sympy.simplify(sympy.sympify(a) - sympy.sympify(b))
-        return diff == 0
-    except Exception:
-        return False
-
-
-def _exprs_equal_after_subs(a: Any, b: Any, subs_map: dict) -> bool:
-    if isinstance(a, str) or isinstance(b, str):
-        return False
-    if isinstance(a, MatrixBase) or isinstance(b, MatrixBase):
-        return False
-    try:
-        aa = sympy.sympify(a).xreplace(subs_map) if subs_map else sympy.sympify(a)
-        bb = sympy.sympify(b).xreplace(subs_map) if subs_map else sympy.sympify(b)
-        if aa == bb:
-            return True
-        diff = sympy.simplify(aa - bb)
-        return diff == 0
-    except Exception:
-        return False
-
-
-def _guard_degenerate_lhs(lhs: Any, rhs: Any, raw: str) -> Any:
-    if lhs is None or isinstance(lhs, str):
-        return lhs
-    if isinstance(lhs, MatrixBase) or isinstance(rhs, MatrixBase):
-        return lhs
-    try:
-        if lhs == rhs:
-            return raw
-    except Exception:
-        pass
-    return lhs
-
-
-def _format_float_str(value: Any, digits: int = DECIMAL_DIGITS) -> Any:
-    fv = float(value)
-    s = f"{fv:.{digits}f}"
-    if "." in s:
-        s = s.rstrip("0").rstrip(".")
-    if s in ("", "-", "-0"):
-        s = "0"
-    if "." in s:
-        sig = len(s.replace(".", "").replace("-", "").lstrip("0")) or 1
-        return sympy.Float(s, sig)
-    return sympy.Integer(s)
-
-
-def _cap_float_precision(expr: Any, digits: int = DECIMAL_DIGITS) -> Any:
-    if isinstance(expr, MatrixBase):
-        return expr.applyfunc(lambda v: _cap_float_precision(v, digits))
-    try:
-        if isinstance(expr, sympy.Float):
-            return _format_float_str(expr, digits)
-        if hasattr(expr, "atoms"):
-            floats = expr.atoms(sympy.Float)
-            if floats:
-                mapping = {f: _format_float_str(f, digits) for f in floats}
-                return expr.xreplace(mapping)
-    except Exception:
-        pass
-    return expr
-
-
-_SCI_NOTATION_SMALL_THRESHOLD = Decimal(1).scaleb(-DECIMAL_DIGITS)
-
-
-def format_large_result(value: Any) -> Any:
-    if isinstance(value, MatrixBase):
-        return value.applyfunc(format_large_result)
-    try:
-        v = sympy.sympify(value)
-        if not (v.is_number and getattr(v, "is_real", False) and v.is_finite):
-            return value
-        if v == 0:
-            return value
-        ev = v.evalf(30)
-        dec = Decimal(str(ev))
-        abs_dec = abs(dec)
-        if not (abs_dec > LARGE_INT_THRESHOLD or abs_dec < _SCI_NOTATION_SMALL_THRESHOLD):
-            return value
-        sci_str = format(dec, ".6e")
-        mant, exp_str = sci_str.split("e")
-        exp = int(exp_str)
-        if "." in mant:
-            mant = mant.rstrip("0").rstrip(".")
-        if mant in ("", "-"):
-            mant += "0"
-        mant_val = sympy.Float(mant)
-        power = sympy.Pow(sympy.Integer(10), exp, evaluate=False)
-        return sympy.Mul(mant_val, power, evaluate=False)
-    except Exception:
-        pass
-    return value
-
-
-def has_decimal_variant(value: Any) -> bool:
-    if isinstance(value, MatrixBase):
-        return any(has_decimal_variant(v) for v in value)
-    try:
-        v = sympy.sympify(value)
-        if not v.is_number:
-            return False
-        re_part, im_part = sympy.re(v), sympy.im(v)
-        if im_part != 0:
-            return has_decimal_variant(re_part) or has_decimal_variant(im_part)
-        if re_part.is_Integer:
-            return False
-        return True
-    except Exception:
-        return False
-
-
-def to_decimal_display(value: Any, digits: int = DECIMAL_DIGITS) -> Any:
-    if isinstance(value, MatrixBase):
-        return value.applyfunc(lambda v: to_decimal_display(v, digits))
-    try:
-        v = sympy.sympify(value)
-        if not v.is_number:
-            return value
-        re_part, im_part = sympy.re(v), sympy.im(v)
-        if im_part != 0:
-            re_val = to_decimal_display(re_part, digits) if re_part != 0 else sympy.Integer(0)
-            im_val = to_decimal_display(im_part, digits)
-            return sympy.Add(re_val, sympy.Mul(im_val, sympy.I, evaluate=False), evaluate=False)
-        fv = v.evalf(30)
-        return _format_float_str(fv, digits)
-    except Exception:
-        return value
-
-
-def format_decimal_string(value: Any, digits: int = DECIMAL_DIGITS) -> str:
-    try:
-        v = sympy.sympify(value)
-    except Exception:
-        return str(value)
-
-    if not v.is_number:
-        return str(value)
-
-    re_part, im_part = sympy.re(v), sympy.im(v)
-    if im_part != 0:
-        im_is_neg = bool(im_part.is_negative)
-        im_abs_str = format_decimal_string(Abs(im_part), digits)
-        if re_part == 0:
-            return f"-{im_abs_str}i" if im_is_neg else f"{im_abs_str}i"
-        re_str = format_decimal_string(re_part, digits)
-        sign = "-" if im_is_neg else "+"
-        return f"{re_str}{sign}{im_abs_str}i"
-
-    v = re_part
-
-    if v.is_Integer:
-        return str(int(v))
-
-    old_prec = getcontext().prec
-    try:
-        getcontext().prec = digits + 40
-
-        if v.is_Rational:
-            p, q = int(v.p), int(v.q)
-            neg = p < 0
-            exact = Decimal(abs(p)) / Decimal(q)
-            has_more = None
-        else:
-            neg = bool(v.is_negative)
-            try:
-                exact = abs(Decimal(str(v.evalf(digits + 30))))
-            except Exception:
-                exact = abs(Decimal(str(float(v.evalf(digits + 30)))))
-            has_more = True
-
-        quant = Decimal(1).scaleb(-digits)
-        truncated = exact.quantize(quant, rounding=ROUND_DOWN)
-        if has_more is None:
-            has_more = (exact - truncated) != 0
-    except Exception:
-        return str(value)
-    finally:
-        getcontext().prec = old_prec
-
-    s = f"{truncated:.{digits}f}"
-    if not has_more:
-        if "." in s:
-            s = s.rstrip("0").rstrip(".")
-    if s in ("", "-0"):
-        s = "0"
-    if neg and s != "0" and not s.startswith("-"):
-        s = "-" + s
-    if has_more:
-        s += "..."
-    return s
-
-
-def to_decimal_display_text(value: Any, digits: int = DECIMAL_DIGITS):
-    if isinstance(value, MatrixBase):
-        rows, cols = value.shape
-        return [
-            [format_decimal_string(value[i, j], digits) for j in range(cols)]
-            for i in range(rows)
-        ]
-    return format_decimal_string(value, digits)
-
-
-def _do_calculate(raw: str, mode: str, angle_unit: str) -> CalcResult:
-    processed = preprocess(raw, mode)
-    validate_ast(processed)
-
-    namespace = build_namespace(mode, angle_unit)
-    transformations = standard_transformations + (
-        implicit_multiplication_application,
-        convert_xor,
-    )
-    global_dict = {"__builtins__": {}}
-    global_dict.update(namespace)
-
-    _step_log.clear()
-    try:
-        expr = parse_expr(
-            processed,
-            local_dict=namespace,
-            global_dict=global_dict,
-            transformations=transformations,
-            evaluate=True,
-        )
-    except CalcError:
-        raise
-    except Exception as e:
-        raise CalcError(f"算式格式錯誤，請確認輸入是否正確：{e}")
-
-    if isinstance(expr, list):
-        expr = Matrix(expr)
-
-    sub_steps = list(_step_log)
-    step_log_map = dict(sub_steps)
-
-    display_expr = _build_display_expr(processed, angle_unit) if mode == "scalar" else None
-
-    matrix_op_display = (
-        expr if (mode in _MATRIX_OP_MODES and isinstance(expr, MatrixBase)) else None
-    )
-
-    steps: List[Tuple[str, Any, Any]] = [
-        ("原始算式", None,
-         display_expr if display_expr is not None
-         else (matrix_op_display if matrix_op_display is not None else raw))
-    ]
-
-    if mode == "scalar" and display_expr is not None:
-        state = display_expr
-        guard = 0
-        while guard < 60:
-            guard += 1
-            prev_state = state
-            target, new_state = _reduce_one_step(state, step_log_map)
-            if target is None:
-                break
-            if isinstance(target, sympy.core.function.AppliedUndef):
-                steps.append((f"計算 {target}", prev_state, new_state))
-            state = new_state
-            if isinstance(state, sympy.Number):
-                break
-    else:
-        for call_expr, value in sub_steps:
-            steps.append((f"計算 {call_expr}", call_expr, value))
-
-    if mode == "scalar":
-        try:
-            expanded = sympy.expand(expr)
-        except Exception:
-            expanded = expr
-        if expanded != expr:
-            steps.append(("展開 / 化簡", expr, expanded))
-        try:
-            simplified = simplify(expr)
-        except Exception:
-            simplified = expanded
-        if simplified != expanded:
-            steps.append(("進一步化簡", expanded, simplified))
-        result = simplified
-    elif mode == "determinant":
-        if not isinstance(expr, MatrixBase):
-            raise CalcError("「行列式」模式請直接輸入矩陣，例如 [[1,2],[3,4]]。")
-        if expr.rows != expr.cols:
-            raise CalcError(
-                f"行列式只能用在方陣（列數＝欄數），目前輸入的是 {expr.rows}x{expr.cols} 矩陣。"
-            )
-        try:
-            result = expr.det()
-        except Exception as e:
-            raise CalcError(f"行列式計算失敗，請確認矩陣內容：{e}")
-    elif mode == "permanent":
-        if not isinstance(expr, MatrixBase):
-            raise CalcError("「積和式」模式請直接輸入矩陣，例如 [[1,2],[3,4]]。")
-        if expr.rows != expr.cols:
-            raise CalcError(
-                f"積和式只能用在方陣（列數＝欄數），目前輸入的是 {expr.rows}x{expr.cols} 矩陣。"
-            )
-        try:
-            result = expr.per()
-        except Exception as e:
-            raise CalcError(f"積和式計算失敗，請確認矩陣內容：{e}")
-    elif mode == "diagonal":
-        if not isinstance(expr, MatrixBase):
-            raise CalcError("「對角線」模式請直接輸入矩陣，例如 [[1,2],[3,4]]。")
-        try:
-            result = expr.diagonal().T
-        except Exception as e:
-            raise CalcError(f"取對角線失敗，請確認矩陣內容：{e}")
-    else:
-        result = expr
-
-    result = _cap_float_precision(result)
-    result = format_large_result(result)
-
-    final_lhs = (
-        display_expr if display_expr is not None
-        else (matrix_op_display if matrix_op_display is not None else raw)
-    )
-
-    skip_final_step = False
-    if steps:
-        _, last_lhs, last_rhs = steps[-1]
-        if (
-            last_lhs is not None
-            and not isinstance(last_lhs, str)
-            and not isinstance(final_lhs, str)
-            and not isinstance(last_lhs, MatrixBase)
-            and not isinstance(final_lhs, MatrixBase)
-            and not isinstance(last_rhs, MatrixBase)
-            and not isinstance(result, MatrixBase)
-        ):
-            try:
-                if last_lhs == final_lhs and last_rhs == result:
-                    skip_final_step = True
-            except Exception:
-                pass
-
-    if skip_final_step:
-        _, last_lhs, last_rhs = steps[-1]
-        steps[-1] = ("最終結果", last_lhs, last_rhs)
-    else:
-        steps.append(("最終結果", final_lhs, result))
-
-    guarded_steps: List[Tuple[str, Any, Any]] = []
-    for title, lhs, rhs in steps:
-        guarded_steps.append((title, _guard_degenerate_lhs(lhs, rhs, raw), rhs))
-
-    return CalcResult(mode=mode, original_display=raw, result=result, steps=guarded_steps)
-
-
-from sympy.core.parameters import evaluate as _sympy_evaluate_ctx
-
-_FROZEN_TAG = "__frozen_sympy_expr__"
-
-
-def _freeze_step_value(value: Any) -> Any:
-    if value is None or isinstance(value, str) or isinstance(value, MatrixBase):
-        return value
-    try:
-        return (_FROZEN_TAG, sympy.srepr(value))
-    except Exception:
-        return value
-
-
-def _thaw_step_value(value: Any) -> Any:
-    if (
-        isinstance(value, tuple)
-        and len(value) == 2
-        and value[0] == _FROZEN_TAG
-    ):
-        with _sympy_evaluate_ctx(False):
-            return sympy.sympify(value[1], evaluate=False)
-    return value
-
-
-def _freeze_calc_result(result: "CalcResult") -> "CalcResult":
-    result.steps = [
-        (title, _freeze_step_value(lhs), _freeze_step_value(rhs))
-        for title, lhs, rhs in result.steps
-    ]
-    return result
-
-
-def _thaw_calc_result(result: "CalcResult") -> "CalcResult":
-    result.steps = [
-        (title, _thaw_step_value(lhs), _thaw_step_value(rhs))
-        for title, lhs, rhs in result.steps
-    ]
-    return result
-
-
-def _worker(raw: str, mode: str, angle_unit: str, queue: "mp.Queue") -> None:
-    try:
-        result = _do_calculate(raw, mode, angle_unit)
-        queue.put(("ok", _freeze_calc_result(result)))
-    except CalcError as e:
-        queue.put(("error", str(e)))
-    except Exception as e:
-        queue.put(("error", f"計算過程發生未預期的錯誤：{e}"))
-
-
-async def safe_calculate(
-    raw: str,
-    mode: Optional[str],
-    angle_unit: str,
-    loop=None,
-    timeout: float = COMPUTE_TIMEOUT,
-    variables: Optional[str] = None,
-) -> CalcResult:
-    import asyncio
-
-    raw = substitute_placeholders(raw, variables)
-
-    _check_raw_safety(raw)
-
-    resolved_mode = mode or detect_mode(raw)
-    if resolved_mode in ("vector", "matrix") or resolved_mode in _MATRIX_OP_MODES:
-        _check_matrix_dim_safety(raw)
-
-    if loop is None:
-        loop = asyncio.get_event_loop()
-
-    def _run() -> CalcResult:
-        ctx = mp.get_context("spawn")
-        q: "mp.Queue" = ctx.Queue()
-        p = ctx.Process(target=_worker, args=(raw, resolved_mode, angle_unit, q))
-        p.start()
-        p.join(timeout)
-        if p.is_alive():
-            p.terminate()
-            p.join()
-            raise CalcError(
-                "計算時間過長（可能是數字過大或運算過於複雜），請簡化算式後再試一次。"
-            )
-        if q.empty():
-            raise CalcError("計算過程發生未知錯誤（子行程未回傳結果）。")
-        status, payload = q.get()
-        if status == "error":
-            raise CalcError(payload)
-        return _thaw_calc_result(payload)
-
-    return await loop.run_in_executor(None, _run)
+def _strip_thousands
